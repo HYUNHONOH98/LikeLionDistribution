@@ -1,121 +1,55 @@
 import json
+from telnetlib import STATUS
 from django.views.generic import View
+from requests import Response
 
 from accounts.models import User
+from todos.serializers import TodoSerializer
 from .models import Todo
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from rest_framework import permissions, generics
+from rest_framework.decorators import action
 
+from rest_framework import permissions, generics, status, mixins, viewsets
+from rest_framework.views import APIView
 
-def todo_instance_to_dictionary(todo):
-  """
-  장고 단일 모델 인스턴스, 혹은 쿼리셋을 파이썬 딕셔너리로 변환하는 헬퍼 함수
-  """
-  result = {}
-  result["id"] = todo.id
-  result["text"] = todo.text
-  result["done"] = todo.done
-  return result
-
-class ViewWithoutCSRFAuthentication(generics.GenericAPIView):
-  @method_decorator(csrf_exempt)
-  def dispatch(self, request, *args, **kwargs):
-    return super(ViewWithoutCSRFAuthentication, self).dispatch(request, *args, **kwargs)
-
-class TodoListView(generics.GenericAPIView):
+class TodoListView(mixins.ListModelMixin, mixins.CreateModelMixin, generics.GenericAPIView):
   permission_classes = [permissions.IsAuthenticated]
+  serializer_class = TodoSerializer
 
-  def get(self, request):
-    try:
-      todo_list = []
-      todo_queryset = Todo.objects.filter(author_id = request.user.id)
-      for todo_instance in todo_queryset:
-        todo_list.append(todo_instance_to_dictionary(todo_instance))
-      data = { "todos": todo_list }
-      return JsonResponse(data, status=200)
-    except:
-      return JsonResponse({"msg": "Failed to get todos"}, status=404)
-
-class TodoCreateView(ViewWithoutCSRFAuthentication):
-  permission_classes = [permissions.IsAuthenticated]
-
-  def post(self, request):
-    try:
-      body = json.loads(request.body) #body에서 받아온 것을 역직렬화!
-    except:
-      return JsonResponse({"msg": "Invalid parameters"}, status=400)
-
-    try:
-      todo_instance = Todo.objects.create(text=body["text"], author_id = request.user.id)
-    except:
-      return JsonResponse({"msg": "Failed to create todos"}, status=400)
-
-    todo_dict = todo_instance_to_dictionary(todo_instance)
-    data = { "todo": todo_dict }
-    return JsonResponse(data, status=200)
-
-class TodoCheckView(ViewWithoutCSRFAuthentication):
-  permission_classes = [permissions.IsAuthenticated]
-
-  def patch(self, request, id):
-    try:
-      todo_instance = Todo.objects.get(id=id)
-      if (todo_instance.author_id != request.user.id):
-        return JsonResponse({"msg": "Cannot access other's todo"}, status=401)
-      todo_instance.check_todo()
-      todo_dict = todo_instance_to_dictionary(todo_instance)
-      data = { "todo": todo_dict }
-      return JsonResponse(data, status=200)
-    except:
-      return JsonResponse({"msg": "Failed to create todos"}, status=400)
-
-class TodoView(ViewWithoutCSRFAuthentication):
-  permission_classes = [permissions.IsAuthenticated]
-
-  def get(self, request, id):
-    try:
-      todo_instance = Todo.objects.get(id=id)
-
-      if (todo_instance.author.id != request.user.id):
-        return JsonResponse({"msg": "Cannot access other's todo"}, status=401)
-
-      todo_dict = todo_instance_to_dictionary(todo_instance)
-      data = { "todo": todo_dict }
-      return JsonResponse(data, status=200)
-    except:
-      return JsonResponse({"msg": "Failed to get todo"}, status=404)
-
-  def patch(self, request, id):
-    try:
-      body = json.loads(request.body)
-    except:
-      return JsonResponse({"msg": "Invalid parameters"}, status=400)
-
-    try:
-      todo_instance = Todo.objects.get(id=id)
-      if (todo_instance.author.id != request.user.id):
-        return JsonResponse({"msg": "Cannot access other's todo"}, status=401)
-
-      todo_instance.text = body["text"]
-      todo_instance.save()
-      todo_dict = todo_instance_to_dictionary(todo_instance)
-      data = { "todo": todo_dict }
-      return JsonResponse(data, status=200)
-    except:
-      return JsonResponse({"msg": "Failed to edit todo"}, status=404)
+	### GenericAPIView의 get_queryset 메소드를 오버라이드 ###
+  def get_queryset(self):
+    return Todo.objects.filter(author=self.request.user)
   
-  def delete(self, request, id):
-    try:
-      todo_instance = Todo.objects.get(id=id)
+  def get(self, request):
+    return self.list(request)
+  
+  def post(self, request):
+    return self.create(request)
+  
+	### CreateModelMixin의 perform_create 메소드를 오버라이드 ###
+  def perform_create(self, serializer):
+    serializer.save(author=self.request.user)
 
-      if (todo_instance.author.id != request.user.id):
-        return JsonResponse({"msg": "Cannot access other's todo"}, status=401)
+    ## 커스텀할 기능들에 대해서만 mixin 을 이용해서 재정의, 기본적인 기능들은 Generic APIView 로도 처리가 가능하다.
 
-      todo_dict = todo_instance_to_dictionary(todo_instance)
-      todo_instance.delete()
-      data = { "todo": todo_dict }
-      return JsonResponse(data, status=200)
-    except:
-      return JsonResponse({"msg": "Failed to delete todo"}, status=404)
+
+# class TodoViewSet(viewsets.ModelViewSet):
+#   permission_classes = [permissions.IsAuthenticated]
+#   serializer_class = TodoSerializer
+#   queryset = Todo.objects.all()
+
+#   def get_queryset(self):
+#     return Todo.objects.filter(author=self.request.user)
+  
+#   def perform_create(self, serializer):
+#     serializer.save(author=self.request.user)
+
+# 	### 추가하기 ###
+#   @action(detail=True, methods=['patch'])
+#   def check(self, request, pk):
+#     todo = Todo.objects.get(pk=pk)
+#     todo.check_todo()
+#     serializer = self.serializer_class(todo)
+#     return Response(serializer.data, status=status.HTTP_200_OK)
